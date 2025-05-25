@@ -1,0 +1,6 @@
+#/bin/bash
+
+read -p "Enter url: " url
+read -p "Enter port: " port
+
+cloudflared access tcp --hostname $url --url 127.0.0.1:$port

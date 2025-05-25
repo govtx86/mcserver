@@ -1,0 +1,5 @@
+#/bin/bash
+
+read -p "Enter port: " port
+
+cloudflared tunnel --url tcp://localhost:$port

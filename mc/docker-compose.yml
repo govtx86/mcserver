@@ -1,0 +1,22 @@
+services:
+  mc:
+    build: .
+    network_mode: "host"
+    tty: true
+    stdin_open: true
+    ports:
+      - "8080:8080"
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "1.21.4"
+      MEMORY: "6144M"
+      ONLINE_MODE: "false"
+      SERVER_PORT: "8080"
+      TZ: "Asia/Kolkata"
+      PLUGINS: |-
+        https://github.com/EssentialsX/Essentials/releases/download/2.21.0/EssentialsX-2.21.0.jar
+        https://github.com/EssentialsX/Essentials/releases/download/2.21.0/EssentialsXDiscord-2.21.0.jar
+        https://download.luckperms.net/1581/bukkit/loader/LuckPerms-Bukkit-5.4.164.jar
+    volumes:
+      - "./data:/data"

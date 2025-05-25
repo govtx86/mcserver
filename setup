@@ -1,0 +1,10 @@
+#/bin/bash
+
+cd $(dirname "$0")/
+sudo chmod +x ./bin/*
+
+echo export PATH=\"$(pwd)/bin:\$PATH\" >> ~/.bash_profile
+
+sudo systemctl enable docker.socket
+sudo systemctl start docker.socket
+sudo usermod -aG docker $USER

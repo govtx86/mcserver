@@ -1,0 +1,7 @@
+#!/bin/bash
+
+cd $(dirname "$0")/../mc
+rm -f "nohup.out"
+(nohup cloudflared tunnel --url tcp://localhost:8080 & disown)
+
+(nohup notepad.exe nohup.out > trash.out & disown)
