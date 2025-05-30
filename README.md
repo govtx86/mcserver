@@ -41,9 +41,6 @@ sudo pacman -S git docker docker-compose cloudflared htop wget neovim
 ```
 ## Setup script
 ```
-sudo chmod +x setup
-```
-```
 ./setup
 ```
 
