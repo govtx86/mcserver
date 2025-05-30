@@ -61,3 +61,19 @@ wsl --shell-type login stopServer
 ```
 lp group default permission set essentials.discord.receive.chat
 ```
+
+
+
+## WSL Network slow fix
+```
+netsh winsock reset
+```
+```
+netsh int ip reset all
+```
+```
+netsh winhttp reset proxy
+```
+```
+ipconfig /flushdns
+```
