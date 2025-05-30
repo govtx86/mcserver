@@ -14,7 +14,7 @@ services:
       ONLINE_MODE: "false"
       SERVER_PORT: "8080"
       TZ: "Asia/Kolkata"
-      # PLUGINS: |-
-        # plugin jar file download link here
+      PLUGINS: |-
+         https://github.com/EssentialsX/Essentials/releases/download/2.21.0/EssentialsX-2.21.0.jar
     volumes:
       - "./data:/data"
