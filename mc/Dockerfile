@@ -2,7 +2,7 @@ FROM itzg/minecraft-server:java21
 
 ENV TYPE=PAPER
 
-COPY plugins/ /plugins/
-COPY world/ /world/
-COPY world_nether/ /world_nether/
-COPY world_the_end/ /world_the_end/
+COPY plugin[s]/ /plugins/
+COPY worl[d]/ /world/
+COPY world_nethe[r]/ /world_nether/
+COPY world_the_en[d]/ /world_the_end/
