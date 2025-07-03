@@ -1,3 +1,5 @@
+# TODO: Figure out way to keep wsl docker container running in background 
+
 # Arch setup
 [Arch config](https://wsldl-pg.github.io/ArchW-docs/How-to-Setup/#setup-after-install)
 
