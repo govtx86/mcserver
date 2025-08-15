@@ -6,4 +6,3 @@ if !(docker ps | grep -q "mc-mc-1"); then
     dockerup
 fi
 
-startProxy

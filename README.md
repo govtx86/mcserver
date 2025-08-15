@@ -39,7 +39,7 @@ sudo pacman -Su
 
 ## Install packages
 ```
-sudo pacman -S git docker docker-compose cloudflared htop wget neovim
+sudo pacman -S git docker docker-compose htop wget neovim
 ```
 ## Setup script
 ```
