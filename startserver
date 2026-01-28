@@ -95,28 +95,12 @@ SLEEP_INTERVAL=1
 # We try several patterns: trycloudflare.com, *.loca.lt (if used), https:// or tcp:// lines
 while [ -z "$TUNNEL_URL" ] && [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   if [ -f "$CLOUD_LOG" ]; then
-    # Try to find trycloudflare.com or loca.lt or an explicit URL with scheme
-    TUNNEL_URL=$(
-      # Prefer full URLs that include a scheme
-      grep -Eo '(https?|tcp)://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?&=%+-]*)?' "$CLOUD_LOG" 2>/dev/null \
-        | sed -n '1p' \
-        || true
-    )
 
     if [ -z "$TUNNEL_URL" ]; then
-      # fallback: hostnames like *.trycloudflare.com or *.loca.lt without scheme
+      # fallback: hostnames like *.trycloudflare.com scheme
       TUNNEL_URL=$(
         grep -Eo '[A-Za-z0-9.-]+\.trycloudflare\.com(:[0-9]+)?' "$CLOUD_LOG" 2>/dev/null | sed -n '1p' || true
       )
-      if [ -z "$TUNNEL_URL" ]; then
-        TUNNEL_URL=$(
-          grep -Eo '[A-Za-z0-9.-]+\.loca\.lt(:[0-9]+)?' "$CLOUD_LOG" 2>/dev/null | sed -n '1p' || true
-        )
-      fi
-      if [ -n "$TUNNEL_URL" ] && ! echo "$TUNNEL_URL" | grep -q '://'; then
-        # Default to tcp scheme if no scheme present
-        TUNNEL_URL="tcp://$TUNNEL_URL"
-      fi
     fi
   fi
 
@@ -140,7 +124,7 @@ if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
     log "DISCORD_WEBHOOK_URL does not look like a URL; skipping webhook."
   else
     # Build a minimal JSON payload. If you want richer embeds, change here.
-    PAYLOAD=$(printf '{"content":"Tunnel URL: %s"}' "$TUNNEL_URL")
+    PAYLOAD=$(printf '{"content":"Kerada pillere!!: %s"}' "https://$TUNNEL_URL")
     log "Sending tunnel URL to Discord webhook..."
     if curl -sS -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" >>"$LOGFILE" 2>&1; then
       log "Discord webhook delivered."
