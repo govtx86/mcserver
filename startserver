@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+#
+# start_tunnel_and_watch.sh
+#
+# Starts docker-compose (detached), starts a cloudflared tunnel to tcp://localhost:8080,
+# waits until the tunnel URL is available, posts that URL to a Discord webhook,
+# and continues running in the background watching the docker-compose containers.
+# When the containers stop, it calls the GitHub Codespaces REST API to stop the codespace.
+#
+# Usage:
+#   DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..." \
+#   CODESPACE_NAME="my-codespace-1" \
+#   DOCKER_COMPOSE_DIR="/path/to/dir" \
+#   ./start_tunnel_and_watch.sh
+#
+# Required tools:
+# - docker & docker compose (v2 `docker compose`)
+# - cloudflared (in PATH)
+# - gh (optional; used to obtain GitHub token via `gh auth token`)
+# - curl, grep, sed, awk, nohup
+#
+# Environment variables (recommended):
+# - DISCORD_WEBHOOK_URL  (optional but normally required to notify Discord)
+# - GITHUB_TOKEN         (optional; if not set, script will attempt `gh auth token`)
+# - CODESPACE_NAME       (optional; name of codespace to stop; typically set in a codespace env)
+# - DOCKER_COMPOSE_DIR   (optional; default = current directory)
+# - CLOUD_URL            (optional; default = tcp://localhost:8080)
+# - LOGFILE              (optional; default = $HOME/.codespace_tunnel.log)
+#
+set -euo pipefail
+
+# Defaults
+: "${DOCKER_COMPOSE_DIR:=$(pwd)}"
+: "${CLOUD_URL:=tcp://localhost:8080}"
+: "${LOGFILE:=$HOME/.codespace_tunnel.log}"
+CLOUD_LOG="${LOGFILE}.cloudflared.log"
+MONITOR_LOG="${LOGFILE}.monitor.log"
+
+# Helper: log with timestamp (ISO-ish)
+log() {
+  printf '%s %s\n' "$(date --iso-8601=seconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')" "$*" | tee -a "$LOGFILE"
+}
+
+# Validate docker compose directory
+if [ ! -d "$DOCKER_COMPOSE_DIR" ]; then
+  echo "Error: DOCKER_COMPOSE_DIR '$DOCKER_COMPOSE_DIR' does not exist" >&2
+  exit 2
+fi
+
+cd "$DOCKER_COMPOSE_DIR"
+
+log "=== Starting: docker compose up -d in $DOCKER_COMPOSE_DIR ==="
+if ! docker compose up -d >>"$LOGFILE" 2>&1; then
+  log "docker compose up failed; see $LOGFILE"
+  exit 3
+fi
+log "docker compose started (detached)."
+
+# If GITHUB_TOKEN not set, attempt to retrieve it via `gh auth token`
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+  if command -v gh >/dev/null 2>&1; then
+    # Attempt to read token; do not echo the token to logs
+    if token=$(gh auth token 2>/dev/null || true); then
+      if [ -n "$token" ]; then
+        GITHUB_TOKEN="$token"
+        log "Obtained GITHUB_TOKEN from 'gh auth token'."
+      else
+        log "'gh auth token' returned empty output; GITHUB_TOKEN remains unset."
+      fi
+    else
+      log "Failed to run 'gh auth token'; GITHUB_TOKEN remains unset."
+    fi
+  else
+    log "'gh' CLI not found; cannot retrieve GITHUB_TOKEN automatically."
+  fi
+else
+  log "GITHUB_TOKEN provided via environment."
+fi
+
+# Start cloudflared tunnel in background and capture logs
+log "Starting cloudflared tunnel: cloudflared tunnel --url $CLOUD_URL"
+# Redirect cloudflared output to CLOUD_LOG. Keep the process in background.
+nohup cloudflared tunnel --url "$CLOUD_URL" >"$CLOUD_LOG" 2>&1 &
+CLOUD_PID=$!
+log "cloudflared started with PID $CLOUD_PID. Logs: $CLOUD_LOG"
+
+# Wait for the tunnel URL to appear in cloudflared log
+log "Waiting for tunnel URL to appear in cloudflared logs..."
+TUNNEL_URL=""
+# Timeout after N seconds if not found
+TIMEOUT=120
+ELAPSED=0
+SLEEP_INTERVAL=1
+
+# We try several patterns: trycloudflare.com, *.loca.lt (if used), https:// or tcp:// lines
+while [ -z "$TUNNEL_URL" ] && [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+  if [ -f "$CLOUD_LOG" ]; then
+    # Try to find trycloudflare.com or loca.lt or an explicit URL with scheme
+    TUNNEL_URL=$(
+      # Prefer full URLs that include a scheme
+      grep -Eo '(https?|tcp)://[A-Za-z0-9._:-]+(/[A-Za-z0-9._~/?&=%+-]*)?' "$CLOUD_LOG" 2>/dev/null \
+        | sed -n '1p' \
+        || true
+    )
+
+    if [ -z "$TUNNEL_URL" ]; then
+      # fallback: hostnames like *.trycloudflare.com or *.loca.lt without scheme
+      TUNNEL_URL=$(
+        grep -Eo '[A-Za-z0-9.-]+\.trycloudflare\.com(:[0-9]+)?' "$CLOUD_LOG" 2>/dev/null | sed -n '1p' || true
+      )
+      if [ -z "$TUNNEL_URL" ]; then
+        TUNNEL_URL=$(
+          grep -Eo '[A-Za-z0-9.-]+\.loca\.lt(:[0-9]+)?' "$CLOUD_LOG" 2>/dev/null | sed -n '1p' || true
+        )
+      fi
+      if [ -n "$TUNNEL_URL" ] && ! echo "$TUNNEL_URL" | grep -q '://'; then
+        # Default to tcp scheme if no scheme present
+        TUNNEL_URL="tcp://$TUNNEL_URL"
+      fi
+    fi
+  fi
+
+  if [ -z "$TUNNEL_URL" ]; then
+    sleep "$SLEEP_INTERVAL"
+    ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
+  fi
+done
+
+if [ -z "$TUNNEL_URL" ]; then
+  log "Failed to detect tunnel URL within $TIMEOUT seconds. Check $CLOUD_LOG"
+  log "Keeping cloudflared running in background but exiting this script with error."
+  exit 4
+fi
+
+log "Detected tunnel URL: $TUNNEL_URL"
+
+# Send to Discord webhook if provided
+if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
+  if ! echo "$DISCORD_WEBHOOK_URL" | grep -qE '^https?://'; then
+    log "DISCORD_WEBHOOK_URL does not look like a URL; skipping webhook."
+  else
+    # Build a minimal JSON payload. If you want richer embeds, change here.
+    PAYLOAD=$(printf '{"content":"Tunnel URL: %s"}' "$TUNNEL_URL")
+    log "Sending tunnel URL to Discord webhook..."
+    if curl -sS -H "Content-Type: application/json" -X POST -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" >>"$LOGFILE" 2>&1; then
+      log "Discord webhook delivered."
+    else
+      log "Failed to send Discord webhook. See $LOGFILE for details."
+    fi
+  fi
+else
+  log "DISCORD_WEBHOOK_URL not set; skipping Discord notification."
+fi
+
+# Launch monitor in background that waits until the docker compose containers stop,
+# then calls GitHub Codespaces API to stop the codespace (if credentials supplied).
+log "Preparing and launching background monitor. Monitor logs: $MONITOR_LOG"
+
+# Export needed variables for monitor
+# Export GITHUB_TOKEN if present so the detached monitor can use it.
+export DOCKER_COMPOSE_DIR CLOUD_LOG LOGFILE TUNNEL_URL MONITOR_LOG CLOUD_URL GITHUB_TOKEN CODESPACE_NAME
+
+# The background monitor will:
+# - periodically inspect docker compose container ids and check if any are running
+# - when none are running, call GitHub Codespaces stop API if GITHUB_TOKEN & CODESPACE_NAME provided
+nohup bash -c '
+set -euo pipefail
+log() { printf "%s %s\n" "$(date --iso-8601=seconds 2>/dev/null || date "+%Y-%m-%dT%H:%M:%S%z")" "$*" >>"$MONITOR_LOG"; }
+
+log "Detached monitor starting. Watching docker compose containers in $DOCKER_COMPOSE_DIR"
+cd "$DOCKER_COMPOSE_DIR" || { log "Cannot cd to $DOCKER_COMPOSE_DIR"; exit 1; }
+
+# Helper: get container ids for this compose project
+get_compose_container_ids() {
+  # docker compose ps -q prints container ids (if any)
+  docker compose ps -q 2>/dev/null || true
+}
+
+# Wait loop: break when no containers are running for this compose project
+log "Entering watch loop for compose-managed containers..."
+while true; do
+  ids=$(get_compose_container_ids)
+  if [ -z "$ids" ]; then
+    log "No compose container ids found (zero containers). Exiting watch loop."
+    break
+  fi
+
+  any_running=false
+  for id in $ids; do
+    # inspect .State.Running
+    running=$(docker inspect -f "{{.State.Running}}" "$id" 2>/dev/null || echo "false")
+    if [ "$running" = "true" ]; then
+      any_running=true
+      break
+    fi
+  done
+
+  if [ "$any_running" = "false" ]; then
+    log "No running containers detected for compose stack. Proceeding to shutdown codespace if configured."
+    break
+  fi
+
+  sleep 5
+done
+
+# Attempt to stop the codespace via the GitHub REST API if credentials are provided
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${CODESPACE_NAME:-}" ]; then
+  log "Calling GitHub Codespaces API to stop codespace: $CODESPACE_NAME"
+  status_code=$(curl -sS -o /dev/null -w "%{http_code}" \
+    -X POST \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    "https://api.github.com/user/codespaces/$CODESPACE_NAME/stop" || echo "000")
+  log "Codespace stop request returned HTTP $status_code"
+else
+  log "GITHUB_TOKEN or CODESPACE_NAME not set. Skipping codespace shutdown."
+fi
+
+log "Detached monitor finished. Exiting."
+' >>"$MONITOR_LOG" 2>&1 &
+
+MONITOR_PID=$!
+# Detach the background monitor process from the terminal; disown if possible
+disown "$MONITOR_PID" 2>/dev/null || true
+
+log "Monitor launched in background (PID $MONITOR_PID). Terminal will be freed."
+log "You can inspect logs at: $LOGFILE, $CLOUD_LOG, $MONITOR_LOG"
+
+# Exit foreground; the cloudflared and monitor remain running in background
+exit 0
